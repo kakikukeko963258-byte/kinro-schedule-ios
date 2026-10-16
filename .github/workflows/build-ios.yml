@@ -1,0 +1,45 @@
+name: Build public Release IPA
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test scraper against official HTML and week boundaries
+        run: swift test
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build Release for iPhone
+        run: |
+          set -euo pipefail
+          xcodebuild -project Kinro.xcodeproj -scheme Kinro -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package AltStore IPA
+        run: |
+          set -euo pipefail
+          mkdir -p build/IPA/Payload
+          cp -R build/DerivedData/Build/Products/Release-iphoneos/Kinro.app build/IPA/Payload/
+          plutil -lint build/IPA/Payload/Kinro.app/Info.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' build/IPA/Payload/Kinro.app/Info.plist)" = com.studyquiz.dailyquiz
+          cd build/IPA
+          zip -qr ../Kinro.ipa Payload
+          unzip -t ../Kinro.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kinro-AltStore-Release
+          path: build/Kinro.ipa
+          if-no-files-found: error
+      - name: Publish downloadable IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "build-${{ github.run_number }}" build/Kinro.ipa --title "金ロー予定 Release ${{ github.run_number }}" --notes "AltStore用Release IPA。Bundle IDはStudyQuizと同じcom.studyquiz.dailyquizです。AltStoreで再署名してインストールしてください。"
